@@ -225,7 +225,7 @@ begin
 	x = range(-3, 3, length=100)
 	y = range(-2, 2, length=100)
 	ll(x, y) = neutra([x, y])
-	z = @. ll(x', y)
+	z = @. exp.(ll(x', y))
 	contour(x, y, z, aspect_ratio=:equal, xlabel="z1", ylabel="z2")
 end
 
