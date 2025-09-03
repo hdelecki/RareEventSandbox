@@ -1,17 +1,19 @@
 ### A Pluto.jl notebook ###
-# v0.19.29
+# v0.20.17
 
 using Markdown
 using InteractiveUtils
 
 # This Pluto notebook uses @bind for interactivity. When running this notebook outside of Pluto, the following 'mock version' of @bind gives bound variables a default value (instead of an error).
 macro bind(def, element)
-    quote
+    #! format: off
+    return quote
         local iv = try Base.loaded_modules[Base.PkgId(Base.UUID("6e696c72-6542-2067-7265-42206c756150"), "AbstractPlutoDingetjes")].Bonds.initial_value catch; b -> missing; end
         local el = $(esc(element))
         global $(esc(def)) = Core.applicable(Base.get, el) ? Base.get(el) : iv(el)
         el
     end
+    #! format: on
 end
 
 # ╔═╡ b69809e3-98bd-404d-aef2-112af6ea95da
@@ -25,10 +27,15 @@ begin
 	using PlutoUI
 	using Plots
 	using StatsPlots
+	using ColorSchemes
+	using Printf
+	using LaTeXStrings
 
 	import LogDensityProblems: logdensity
 	import StatsFuns: logsumexp
-end
+
+	default(fontfamily="Computer Modern", framestyle=:box) # LaTeX-style plotting
+end;
 
 # ╔═╡ d35503c2-c770-4fe6-83a8-b4cfe018528a
 md"""
@@ -37,14 +44,30 @@ md"""
 This notebook is a short tutorial on bridge sampling for estimating the probability of rare events.
 """
 
-# ╔═╡ 8de73a40-4621-4058-81be-5d0bcb855505
-# html"""<style>
-# main {
-#     max-width: 60%;
-#     margin-left: 1%;
-#     margin-right: 1% !important;
-# }
-# """
+# ╔═╡ d6158640-391b-4049-a297-f94a487e5c3f
+md"""
+## Rare Event Estimation
+
+In many applications (reliability, finance, climate science, safety validation of autonomous systems), we are interested in estimating the probability of *rare events*: events that occur with very small probability under some input distribution. 
+
+We assume that we have access to a simulator of the system under test and a distribution $$x \sim p(\cdot)$$ over system parameters. Failures are defined in terms of a robustness function $$\rho : \mathcal{X} \to \mathbb{R}$$, which assigns a scalar safety score to the simulation of the system with parameters $x$. A simulation is considered a failure if $$\rho(x) \leq \gamma$$, for some threshold $$\gamma$$. The goal of rare event estimation is to efficiently estimate the failure probability:
+
+$$P_{f} = P(\rho(x) \leq \gamma).$$
+
+This failure probability is related to the distribution over inputs that lead to failure, $p_{f}^{\star}$, where
+
+$$p_{f}^{\star}(x) = \frac{1[\rho(x) \leq \gamma] p(x)}{P_{f}}$$
+where $P_{f}$ serves as the *normalizing constant* of the failure distribution.
+
+This probability is typically very small ($10^{-3}$–$10^{-9}$ or smaller).  
+
+A naive approach is *direct Monte Carlo*: draw $N$ samples from $p(x)$ and count how many have $\rho(x)\leq \gamma$. However, when $P_f$ is small, the expected number of rare-event samples is $N \cdot P_f$. To obtain even a handful of rare-event samples, $N$ must be extremely large, making direct Monte Carlo computationally infeasible.
+
+If you're interested in learning more about rare event estimation, I highly recommend [*Rare Event Simulation Using Monte Carlo Methods* by Rubino & Tuffin](https://onlinelibrary.wiley.com/doi/pdf/10.1002/9780470745403#page=9).
+
+
+
+"""
 
 # ╔═╡ d5bebf5c-36b8-40e8-bef8-9dc86f6bdc3f
 md"""
@@ -73,18 +96,19 @@ $$\rho_b(x) = \sqrt{\rho_1(x) \rho_2(x)}$$
 md"""
 ## Bridge Sampling for Rare Events
 
-How can we use bridge sampling for rare event estimation? The true distribution over inputs $x$ that lead to failure is
+How can we use bridge sampling for rare event estimation? 
 
-$$p_{fail}^{\star}(x) = \frac{1[f(x) \notin \psi] p(x)}{P_{fail}}$$
-where $p(x)$ is the input likelihood, $f(x)$ is the system simulation, $ψ$ is the safe set, and $P_{fail}$ is the probability of failure. 
+Ultimately, we want to estimate the normalizing constant $P_{fail}$. Recall the form of the distribution over inputs that lead to failure:
 
-Ultimately, we want to estimate the normalizing constant $P_{fail}$. We can decompose $P_{fail}$ into a chain of intermediate normalizing constants. First, we can define a series of $K$ intermediate densities that smoothly approximate the true distribution over failures $p_{fail}^{\star}(x)$.
+$$p_{f}^{\star}(x) = \frac{1[\rho(x) \leq \gamma] p(x)}{P_{f}}$$
+
+We can decompose $P_{f}$ into a chain of intermediate normalizing constants. First, we can define a series of $K$ intermediate densities that smoothly approximate the true distribution over failures $p_{f}^{\star}(x)$.
 
 $$\rho_{k}(x) \propto p(x)𝓁(x;\epsilon_k)$$
 
 Here, $𝓁(x;\epsilon)$ is a smooth approximation of the indicator function parameterized by $\epsilon_k$. As $\epsilon_k \rightarrow 0$, $\rho_{k}(x) \propto p_{fail}^{\star}(x)$ and as $\epsilon_k \rightarrow \infty$, $\rho_{k}(x) \propto p(x)$.
 
-We define a sequence of $K$ densities $$\rho_k(x)$$ with decreasing $\epsilon_k$, that gradually moves from the disturbance model to the target distribution. We can estimate the probability of failure by chaining together a product of the normalizing constant ratios. Let $\rho_0$ correspond to the density for the disturbance model and $\rho_\infty$ be the density of the distribution over failures, $\rho_\infty(x)=\rho_0(x) 1[f(x) \notin \psi]$. The probability of failure is:
+We define a sequence of $K$ densities $$\rho_k(x)$$ with decreasing $\epsilon_k$, that gradually moves from the disturbance model to the target distribution. We can estimate the probability of failure by chaining together a product of the normalizing constant ratios. Let $\rho_0$ correspond to the density for the disturbance model and $\rho_\infty$ be the density of the distribution over failures, $\rho_\infty(x)=\rho_0(x) 1[\rho(x) \leq \gamma]$. The probability of failure is:
 
 $$P_{fail} = \mathbb{E}_{x\sim\rho_K}\left[\frac{Z_K}{Z_0} \frac{\rho_\infty(x)}{\rho_K(x)} \right]$$
 
@@ -114,11 +138,11 @@ md"""
 md"""
 ### Data Types
 
-Fist, we'll define some data types to hold some useful info for our validation problem. We use the package LogDensityProblems.jl to define approximate density $\rho_k(x;\epsilon)$ and interface to many sampling algorithms.
+Fist, we'll define some data types to hold some useful info for our rare event estimation problem. We use the package LogDensityProblems.jl to define approximate density $\rho_k(x;\epsilon)$ and interface to many sampling algorithms.
 """
 
 # ╔═╡ 39757c66-09ee-425c-a8dd-d1fe02dc1c13
-struct ValidationProblem
+struct RareEventProblem
 	simulate::Function # Simulate the SUT under disturbances
 	distance::Function # Compute distance to failure of simulated trajectory
 	px::Distribution   # Disturbance model
@@ -129,35 +153,43 @@ end
 
 # ╔═╡ e8dd269f-4f21-4197-89eb-6ca11b219967
 begin
-	function LogDensityProblems.logdensity(p::ValidationProblem, x::AbstractVector)
+	function LogDensityProblems.logdensity(p::RareEventProblem, x::AbstractVector)
 	    τ = p.simulate(x)
 	    Δ = p.distance(τ)
 	    return logpdf(p.px, x) + logpdf(Normal(0, p.ϵ), Δ)
 	end
 	
-	LogDensityProblems.dimension(p::ValidationProblem) = p.xdim * p.horizon
-	LogDensityProblems.capabilities(::ValidationProblem) = LogDensityProblems.LogDensityOrder{0}()
+	LogDensityProblems.dimension(p::RareEventProblem) = p.xdim * p.horizon
+	LogDensityProblems.capabilities(::RareEventProblem) = LogDensityProblems.LogDensityOrder{0}()
 end
 
 # ╔═╡ 22ecda79-4b28-4539-83ad-d931204ddf82
 md"""
 ### Truncated Normal
 
-For the next section of the notebook, we'll assume that we are interested in computing the probability that a random sample from a standard normal is above some positive threshold $\gamma$. Here, we define a utility function that creates a validation problem given a desired threshold $\gamma$ and level of smoothing $\epsilon$. 
+For the next section of the notebook, we'll assume that we are interested in computing the probability that a random sample from a standard normal is above some positive threshold $\gamma$.
+
+That is, we define a rare event (or failure) to occur when $x \leq \gamma$. The failure distribution is
+
+$$p_{f}^{\star}(x) = \frac{1[x \leq \gamma] p(x)}{P_{f}}$$
+
+where $1[x \leq \gamma] p(x)$ defines a truncated normal distribution.
+
+Here, we define a utility function that creates a rare event problem given a desired threshold $\gamma$ and level of smoothing $\epsilon$. 
 """
 
 # ╔═╡ 6fbc3166-3439-46d6-9bab-51aaf66f063b
 function truncated_normal_problem(γ, ϵ)
 	sim(x) = x
-	distance(τ) = clamp.(γ - τ[1], 0.0, Inf)
-	return ValidationProblem(sim, distance, MvNormal(zeros(1), 1.0), ϵ, 1, 1)
+	distance(τ) = clamp.(τ[1] - γ, 0.0, Inf)
+	return RareEventProblem(sim, distance, MvNormal(zeros(1), 1.0), ϵ, 1, 1)
 end
 
 # ╔═╡ 69b85156-fe06-4bd9-a3ed-b034e71985e1
-problem = truncated_normal_problem(5.0, 0.1);
+problem = truncated_normal_problem(-5.0, 0.1);
 
 # ╔═╡ df2d04eb-4734-4cdc-a351-67719e02c900
-function plot_density(p::ValidationProblem, dom; fig=plot(), kwargs...)
+function plot_density(p::RareEventProblem, dom; fig=plot(), kwargs...)
 	ld = map(x->logdensity(p, [x]), dom)
 	plot!(fig, dom, exp.(ld); kwargs...)
 end
@@ -168,32 +200,48 @@ The sliders below can help visualize how the approximate density changes with th
 """
 
 # ╔═╡ baf776b1-9ea0-435b-be96-1ed8969efc0b
-@bind γtemp Slider(0.00:0.1:6.0)
+@bind γtemp Slider(0.00:-0.1:-6.0, default=-5)
 
 # ╔═╡ 4968d062-073f-4c84-ba29-0642d27a7ddc
-@bind ϵtemp Slider(0.1:0.1:10.0)
+@bind ϵtemp Slider(0.1:0.1:10.0, default=0.2)
 
 # ╔═╡ 5efc2b30-7c73-4be5-844b-66b8597eeb09
-plot_density(truncated_normal_problem(γtemp, ϵtemp), collect(0:0.02:10), label="ϵ=$ϵtemp, γ=$γtemp", xlabel="x")
+begin
+	problem_plot_ = plot_density(truncated_normal_problem(γtemp, ϵtemp), collect(-8:0.02:8), label=L"\epsilon=%$ϵtemp", xlabel=L"x", linewidth=3)
+	# plot_density(truncated_normal_problem(γtemp, 1e-6), collect(0:0.02:10), label="failure distribution", xlabel=L"x", linewidth=3, color=:black, fig=problem_plot_)
+	vline!([γtemp], linewidth=3, linestyle=:dash, label=L"\gamma=%$γtemp", color=:gray)
+end
 
 # ╔═╡ e800f099-5c68-4e84-b4d4-f3103448c61d
+
 md"""
 We can also plot the bridge density to get some intuition. The geometric bridge "averages" the two densities. 
 """
 
+# ╔═╡ 4aed7d22-9328-42e6-b411-b6e954b6f5bb
+md"""
+Suppose we have two intermediate densities $p_1$ and $p_2$, where $p_1$ is closer to the base distribution $p_0$ (that is, it has a higher $\epsilon$). Although both are unnormalized, we could compute the ratio between their normalizing constants using bridge sampling. Below, we show how the geometric bridge averages two intermediate distributions depending on each distribution's temperature $\epsilon$
+"""
+
+# ╔═╡ cc1d796c-cf6b-40a0-961d-03111f71a4c3
+@bind set_ϵ1 Slider(0.25:0.01:1.0, default=0.3, show_value=true)
+
+# ╔═╡ e639bbcf-b2f3-47bd-9e2c-469560055dc2
+@bind set_ϵ2 Slider(0.01:0.01:0.25, default=0.1, show_value=true)
+
 # ╔═╡ f79cd85c-d0e9-4831-8547-c50aac921b3b
 begin
-	γt = 5.0
-	dom = collect(0:0.01:10)
+	γt = -5.0
+	dom = collect(-10:0.01:0)
 	
-	p1 = truncated_normal_problem(γt, 0.4)
-	p2 = truncated_normal_problem(γt, 0.1)
+	p1 = truncated_normal_problem(γt, set_ϵ1)
+	p2 = truncated_normal_problem(γt, set_ϵ2)
 	
 	pb(x) = 0.5*logdensity(p2, [x]) + 0.5*logdensity(p1, [x])
 	
-	fig = plot_density(p1, dom, label="p1", xlabel="x")
-	plot_density(p2, dom, fig=fig, label="p2")
-	plot!(fig, dom, map(x->exp(pb(x)), dom), label="Bridge")
+	fig = plot_density(p1, dom, label=L"p_1(x)", xlabel=L"x", linewidth=3, ylabel="density")
+	plot_density(p2, dom, fig=fig, label=L"p_2(x)", linewidth=3)
+	plot!(fig, dom, map(x->exp(pb(x)), dom), label="Bridge", linewidth=3)
 end
 
 # ╔═╡ 8ed8602b-aa67-4ed9-8afa-adb9692abafc
@@ -227,11 +275,11 @@ function hmc_sample(ℓπ, initial_x, n_samples, n_adapts)
 
 	return samples[end]
 
-end
+end;
 
 # ╔═╡ 75dec341-e2ca-4c48-8027-ec573580546b
 md"""
-### Estimating the normalizing constant ratio
+### Estimating the Normalizing Constant Ratio
 Let's define a function to estimate the ratio of normalizing constants using a geometric bridge density. We'll provide the function two densities and samples from each density. The computation is performed in log-space for numerical stability.
 
 Here, we compute:
@@ -245,9 +293,9 @@ We perform the computation in log-space for numerical stability.
 function estimate_log_ratio(logpdf1, logpdf2, x1, x2)
 	# Geometric bridge
 	logpdf_b(x) = 0.5*logpdf1(x) + 0.5*logpdf2(x)
-	logZ_P1 = logsumexp(logpdf_b.(x1) .- logpdf1.(x1))
-	logZ_P2 = logsumexp(logpdf_b.(x2) .- logpdf2.(x2))
-	return logZ_P1 - logZ_P2
+	logZ_P2 = logsumexp(logpdf_b.(x1) .- logpdf1.(x1))
+	logZ_P1 = logsumexp(logpdf_b.(x2) .- logpdf2.(x2))
+	return logZ_P2 - logZ_P1
 end
 
 # ╔═╡ 00acc7d9-34c4-400b-9618-ec800791c45c
@@ -272,7 +320,8 @@ function bridge_sample(p0, qs, N, N_mcmc)
 
 	#Sample initial points from base distribution
 	T = qs[1].horizon
-	x_0 = rand(problem.px, (T, N))
+	x_0 = x_0 = [rand(p0) for _ in 1:N]
+
 	lp_0 = x->logpdf(p0, x)
 	
 	push!(xs, x_0)
@@ -302,14 +351,14 @@ end
 
 # ╔═╡ d81a062c-99b6-4abe-b67c-26eba92b6604
 md"""
-Let's also write a function to compute $P_{fail}$ using:
+Let's also write a function to compute $P_{f}$ using:
 
-$$P_{fail} = \mathbb{E}_{x\sim\rho_K}\left[\frac{Z_K}{Z_0} \frac{\rho_\infty(x)}{\rho_K(x)} \right]$$
+$$P_{f} = \mathbb{E}_{x\sim\rho_K}\left[\frac{Z_K}{Z_0} \frac{\rho_\infty(x)}{\rho_K(x)} \right]$$
 """
 
 # ╔═╡ 860fccb7-9f46-4908-a788-a5686f553afb
 """
-Estimate probability of failure given validation problem, samples `x`, and normalizing constant `Z`
+Estimate failure probablity given 'RareEventProblem', samples `x`, and normalizing constant `Z`
 """
 function estimate_pfail(problem, x, Z)
 	fs = problem.distance.(x) .<= 0.0
@@ -326,9 +375,9 @@ Now we can run bridge sampling. First, we'll define the base distribution, trunc
 
 # ╔═╡ baa0f945-caff-472f-bc5c-4a046cd9b802
 begin
-	γ =8.0
+	γ = -8.0
 	p0 = MvNormal(zeros(1), ones(1))
-	ϵs = [10.0, 5.0, 2.0, 1.0, 0.5, 0.25, 0.1]
+	ϵs = [5.0, 2.0, 1.5, 1.0, 0.75, 0.5, 0.25, 0.1]
 	problem_qs = map(e->truncated_normal_problem(γ, e), ϵs)
 end;
 
@@ -338,7 +387,11 @@ Run the bridge sampler!
 """
 
 # ╔═╡ eb8d40ad-de60-4d29-afc5-0b71b2c1167e
-log_Z, Zs, xs, ρs = bridge_sample(p0, problem_qs, 1000, 10);
+begin
+	n_particles = 1000
+	n_mcmc = 10
+	log_Z, Zs, xs, ρs = bridge_sample(p0, problem_qs, n_particles, n_mcmc);
+end;
 
 # ╔═╡ b7bcb76d-729e-492c-a930-fc3ee8e888fa
 md"""
@@ -354,7 +407,13 @@ Compared to ground truth,
 """
 
 # ╔═╡ 5cdf5494-90a9-4c06-ac17-2f2386337d33
-pfail_gt = 1 - cdf(Normal(), γ)
+pfail_gt = cdf(Normal(), γ)
+
+# ╔═╡ 060345de-1b7f-47c3-a465-c952834abfb9
+md"""
+Importantly, we can get a reasonable estimate of the rare event probability using far fewer samples than direct Monte Carlo sampling. For example, with $\gamma =$ $(γ), we would need on avergage $(@sprintf "%.2g" n2fail_mc) samples just to find one failure, and many more samples to get an accurate estimate of the failure probability. In comparison, here we use roughly $(length(ϵs) * n_particles * n_mcmc) samples.
+
+"""
 
 # ╔═╡ fe549548-dd54-4c64-96be-babe17525835
 md"""
@@ -368,12 +427,28 @@ We can also visualize the samples taken from each density.
 
 # ╔═╡ 839fce28-7d9a-4bd1-9519-8fb164443caa
 begin
-	p_bridges = density(vcat(xs[1]...), label="p0", xlabel="x")
+	density_colors = ColorScheme(get(ColorSchemes.viridis, range(0.0, 1, length=length(ϵs) + 1)))
+	p_bridges = density(vcat(xs[1]...), label=L"p_0(x)", xlabel=L"x", ylabel="density", linewidth=3, bandwidth=0.4, color=density_colors[1], dpi=300)
 	for i=2:length(xs)
-		density!(p_bridges, vcat(xs[i]...), label="ϵ=$(ϵs[i-1])")
+		density!(p_bridges, vcat(xs[i]...), label=L"\epsilon=%$(ϵs[i-1])", linewidth=3, bandwidth=0.25, color=density_colors[i])
 	end
+	#plot!([γ, γ], [0, 6], linestyle=:dash, linecolor=:red, label="Failure threshold", linewidth=2)
+	vline!([γ], linestyle=:dash, linecolor=:gray, linewidth=2, label=L"\gamma=%$γ")
+	#savefig("bridges.png")
 	plot(p_bridges)
 end
+
+# ╔═╡ 6dfe20fe-8ed8-4692-816f-e6b57fc1a327
+
+
+# ╔═╡ 482971bc-7ec8-49a5-b2c8-cb008defbb4c
+
+
+# ╔═╡ 863d5dd7-8c60-4de6-988a-5371b5f005d4
+n2fail_mc = 1/pfail_gt;
+
+# ╔═╡ 3dac50f5-0790-4007-80e3-794bd7256cc0
+
 
 # ╔═╡ 9b0ac0e3-4c67-47d1-b6c8-4c82f15383e8
 # function mc_integrate(lpdf, N=10000000, a=-100, b=100)
@@ -451,20 +526,25 @@ PLUTO_PROJECT_TOML_CONTENTS = """
 [deps]
 AdvancedHMC = "0bf59076-c3b1-5ca4-86bd-e02cd72cde3d"
 AdvancedMH = "5b7e9947-ddc0-4b3f-9b55-0d8042f74170"
+ColorSchemes = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
+LaTeXStrings = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
 LogDensityProblems = "6fdf6af0-433a-55f7-b3ed-c6c6e0b8df7c"
 MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
 Plots = "91a5bcdd-55d7-5caf-9e0b-520d859cae80"
 PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 StatsFuns = "4c63d2b9-4356-54db-8cca-17b64c39e42c"
 StatsPlots = "f3b207a7-027a-5e70-b257-86293d7955fd"
 
 [compat]
 AdvancedHMC = "~0.4.6"
 AdvancedMH = "~0.7.4"
+ColorSchemes = "~3.30.0"
 Distributions = "~0.25.98"
 ForwardDiff = "~0.10.35"
+LaTeXStrings = "~1.4.0"
 LogDensityProblems = "~2.1.1"
 MCMCChains = "~6.0.3"
 Plots = "~1.38.16"
@@ -477,9 +557,9 @@ StatsPlots = "~0.15.5"
 PLUTO_MANIFEST_TOML_CONTENTS = """
 # This file is machine-generated - editing it directly is not advised
 
-julia_version = "1.9.3"
+julia_version = "1.11.6"
 manifest_format = "2.0"
-project_hash = "f8351108b801502efe0656dd17bda50d8167c795"
+project_hash = "568e30b464684f31d9c2df72aebfffc47198f1b0"
 
 [[deps.AbstractFFTs]]
 deps = ["LinearAlgebra"]
@@ -559,7 +639,7 @@ version = "2.3.0"
 
 [[deps.ArgTools]]
 uuid = "0dad84c5-d112-42e6-8d28-ef12dabb789f"
-version = "1.1.1"
+version = "1.1.2"
 
 [[deps.Arpack]]
 deps = ["Arpack_jll", "Libdl", "LinearAlgebra", "Logging"]
@@ -575,6 +655,7 @@ version = "3.5.1+1"
 
 [[deps.Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
+version = "1.11.0"
 
 [[deps.AxisAlgorithms]]
 deps = ["LinearAlgebra", "Random", "SparseArrays", "WoodburyMatrices"]
@@ -610,6 +691,7 @@ version = "0.3.39"
 
 [[deps.Base64]]
 uuid = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
+version = "1.11.0"
 
 [[deps.Baselet]]
 git-tree-sha1 = "aebf55e6d7795e02ca500a689d326ac979aaf89e"
@@ -659,9 +741,9 @@ version = "0.7.2"
 
 [[deps.ColorSchemes]]
 deps = ["ColorTypes", "ColorVectorSpace", "Colors", "FixedPointNumbers", "PrecompileTools", "Random"]
-git-tree-sha1 = "67c1f244b991cad9b0aa4b7540fb758c2488b129"
+git-tree-sha1 = "a656525c8b46aa6a1c76891552ed5381bb32ae7b"
 uuid = "35d6a980-a343-548e-a6ea-1d62b119f2f4"
-version = "3.24.0"
+version = "3.30.0"
 
 [[deps.ColorTypes]]
 deps = ["FixedPointNumbers", "Random"]
@@ -704,7 +786,7 @@ weakdeps = ["Dates", "LinearAlgebra"]
 [[deps.CompilerSupportLibraries_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "e66e0078-7015-5450-92f7-15fbd957f2ae"
-version = "1.0.5+0"
+version = "1.1.1+0"
 
 [[deps.CompositionsBase]]
 git-tree-sha1 = "802bb88cd69dfd1509f6670416bd4434015693ad"
@@ -769,6 +851,7 @@ version = "1.0.0"
 [[deps.Dates]]
 deps = ["Printf"]
 uuid = "ade2ca70-3891-5945-98fb-dc099432e06a"
+version = "1.11.0"
 
 [[deps.DefineSingletons]]
 git-tree-sha1 = "0fba8b706d0178b4dc7fd44a96a92382c9065c2c"
@@ -807,6 +890,7 @@ weakdeps = ["ChainRulesCore", "SparseArrays"]
 [[deps.Distributed]]
 deps = ["Random", "Serialization", "Sockets"]
 uuid = "8ba89e20-285c-5b6f-9357-94700520ee1b"
+version = "1.11.0"
 
 [[deps.Distributions]]
 deps = ["FillArrays", "LinearAlgebra", "PDMats", "Printf", "QuadGK", "Random", "SpecialFunctions", "Statistics", "StatsAPI", "StatsBase", "StatsFuns", "Test"]
@@ -883,6 +967,7 @@ version = "3.3.10+0"
 
 [[deps.FileWatching]]
 uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+version = "1.11.0"
 
 [[deps.FillArrays]]
 deps = ["LinearAlgebra", "Random"]
@@ -938,6 +1023,7 @@ version = "1.0.10+0"
 [[deps.Future]]
 deps = ["Random"]
 uuid = "9fa8497b-333b-5362-9e8d-4d0656e87820"
+version = "1.11.0"
 
 [[deps.GLFW_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Libglvnd_jll", "Pkg", "Xorg_libXcursor_jll", "Xorg_libXi_jll", "Xorg_libXinerama_jll", "Xorg_libXrandr_jll"]
@@ -1036,6 +1122,7 @@ version = "2023.2.0+0"
 [[deps.InteractiveUtils]]
 deps = ["Markdown"]
 uuid = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+version = "1.11.0"
 
 [[deps.Interpolations]]
 deps = ["Adapt", "AxisAlgorithms", "ChainRulesCore", "LinearAlgebra", "OffsetArrays", "Random", "Ratios", "Requires", "SharedArrays", "SparseArrays", "StaticArrays", "WoodburyMatrices"]
@@ -1123,9 +1210,9 @@ uuid = "dd4b983a-f0e5-5f8d-a1b7-129d4a5fb1ac"
 version = "2.10.1+0"
 
 [[deps.LaTeXStrings]]
-git-tree-sha1 = "f2355693d6778a178ade15952b7ac47a4ff97996"
+git-tree-sha1 = "dda21b8cbd6a6c40d9d02a73230f9d70fed6918c"
 uuid = "b964fa9f-0449-5b57-a5c2-d3ea65f4040f"
-version = "1.3.0"
+version = "1.4.0"
 
 [[deps.Latexify]]
 deps = ["Formatting", "InteractiveUtils", "LaTeXStrings", "MacroTools", "Markdown", "OrderedCollections", "Printf", "Requires"]
@@ -1144,6 +1231,7 @@ version = "0.16.1"
 [[deps.LazyArtifacts]]
 deps = ["Artifacts", "Pkg"]
 uuid = "4af54fe1-eca0-43a8-85a7-787d91b784e3"
+version = "1.11.0"
 
 [[deps.LeftChildRightSiblingTrees]]
 deps = ["AbstractTrees"]
@@ -1154,24 +1242,31 @@ version = "0.2.0"
 [[deps.LibCURL]]
 deps = ["LibCURL_jll", "MozillaCACerts_jll"]
 uuid = "b27032c2-a3e7-50c8-80cd-2d36dbcbfd21"
-version = "0.6.3"
+version = "0.6.4"
 
 [[deps.LibCURL_jll]]
 deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll", "Zlib_jll", "nghttp2_jll"]
 uuid = "deac9b47-8bc7-5906-a0fe-35ac56dc84c0"
-version = "7.84.0+0"
+version = "8.6.0+0"
 
 [[deps.LibGit2]]
-deps = ["Base64", "NetworkOptions", "Printf", "SHA"]
+deps = ["Base64", "LibGit2_jll", "NetworkOptions", "Printf", "SHA"]
 uuid = "76f85450-5226-5b5a-8eaa-529ad045b433"
+version = "1.11.0"
+
+[[deps.LibGit2_jll]]
+deps = ["Artifacts", "LibSSH2_jll", "Libdl", "MbedTLS_jll"]
+uuid = "e37daf67-58a4-590a-8e99-b0245dd2ffc5"
+version = "1.7.2+0"
 
 [[deps.LibSSH2_jll]]
 deps = ["Artifacts", "Libdl", "MbedTLS_jll"]
 uuid = "29816b5a-b9ab-546f-933c-edad1886dfa8"
-version = "1.10.2+0"
+version = "1.11.0+1"
 
 [[deps.Libdl]]
 uuid = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
+version = "1.11.0"
 
 [[deps.Libffi_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -1224,6 +1319,7 @@ version = "2.36.0+0"
 [[deps.LinearAlgebra]]
 deps = ["Libdl", "OpenBLAS_jll", "libblastrampoline_jll"]
 uuid = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+version = "1.11.0"
 
 [[deps.LogDensityProblems]]
 deps = ["ArgCheck", "DocStringExtensions", "Random"]
@@ -1233,9 +1329,9 @@ version = "2.1.1"
 
 [[deps.LogDensityProblemsAD]]
 deps = ["DocStringExtensions", "LogDensityProblems", "Requires", "SimpleUnPack"]
-git-tree-sha1 = "7841ebecc60703fa978cbe9623e1a37dcaf96b75"
+git-tree-sha1 = "54a8ab6b7f3c321876395639788c6891b5e806b4"
 uuid = "996a588d-648d-4e1f-a8f0-a84b347e47b1"
-version = "1.6.1"
+version = "1.8.0"
 
     [deps.LogDensityProblemsAD.extensions]
     LogDensityProblemsADADTypesExt = "ADTypes"
@@ -1275,6 +1371,7 @@ version = "0.3.26"
 
 [[deps.Logging]]
 uuid = "56ddb016-857b-54e1-b83d-db4d58db5568"
+version = "1.11.0"
 
 [[deps.LoggingExtras]]
 deps = ["Dates", "Logging"]
@@ -1320,6 +1417,7 @@ version = "0.5.11"
 [[deps.Markdown]]
 deps = ["Base64"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
+version = "1.11.0"
 
 [[deps.MbedTLS]]
 deps = ["Dates", "MbedTLS_jll", "MozillaCACerts_jll", "Random", "Sockets"]
@@ -1330,7 +1428,7 @@ version = "1.1.7"
 [[deps.MbedTLS_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "c8ffd9c3-330d-5841-b78e-0817d7145fa1"
-version = "2.28.2+0"
+version = "2.28.6+0"
 
 [[deps.Measures]]
 git-tree-sha1 = "c13304c81eec1ed3af7fc20e75fb6b26092a1102"
@@ -1351,10 +1449,11 @@ version = "1.1.0"
 
 [[deps.Mmap]]
 uuid = "a63ad114-7e13-5084-954f-fe012c677804"
+version = "1.11.0"
 
 [[deps.MozillaCACerts_jll]]
 uuid = "14a3606d-f60d-562e-9121-12d972cd8159"
-version = "2022.10.11"
+version = "2023.12.12"
 
 [[deps.MultivariateStats]]
 deps = ["Arpack", "LinearAlgebra", "SparseArrays", "Statistics", "StatsAPI", "StatsBase"]
@@ -1403,12 +1502,12 @@ version = "1.3.5+1"
 [[deps.OpenBLAS_jll]]
 deps = ["Artifacts", "CompilerSupportLibraries_jll", "Libdl"]
 uuid = "4536629a-c528-5b80-bd46-f80d51c5b363"
-version = "0.3.21+4"
+version = "0.3.27+1"
 
 [[deps.OpenLibm_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "05823500-19ac-5b8b-9628-191a04bc5112"
-version = "0.8.1+0"
+version = "0.8.5+0"
 
 [[deps.OpenSSL]]
 deps = ["BitFlags", "Dates", "MozillaCACerts_jll", "OpenSSL_jll", "Sockets"]
@@ -1442,7 +1541,7 @@ version = "1.6.2"
 [[deps.PCRE2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "efcefdf7-47ab-520b-bdef-62a2eaa19f15"
-version = "10.42.0+0"
+version = "10.42.0+1"
 
 [[deps.PDMats]]
 deps = ["LinearAlgebra", "SparseArrays", "SuiteSparse"]
@@ -1468,9 +1567,13 @@ uuid = "30392449-352a-5448-841d-b1acce4e97dc"
 version = "0.42.2+0"
 
 [[deps.Pkg]]
-deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "REPL", "Random", "SHA", "Serialization", "TOML", "Tar", "UUIDs", "p7zip_jll"]
+deps = ["Artifacts", "Dates", "Downloads", "FileWatching", "LibGit2", "Libdl", "Logging", "Markdown", "Printf", "Random", "SHA", "TOML", "Tar", "UUIDs", "p7zip_jll"]
 uuid = "44cfe95a-1eb2-52ea-b672-e2afdf69b78f"
-version = "1.9.2"
+version = "1.11.0"
+weakdeps = ["REPL"]
+
+    [deps.Pkg.extensions]
+    REPLExt = "REPL"
 
 [[deps.PlotThemes]]
 deps = ["PlotUtils", "Statistics"]
@@ -1531,6 +1634,7 @@ version = "2.2.7"
 [[deps.Printf]]
 deps = ["Unicode"]
 uuid = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+version = "1.11.0"
 
 [[deps.ProgressLogging]]
 deps = ["Logging", "SHA", "UUIDs"]
@@ -1557,12 +1661,14 @@ uuid = "1fd47b50-473d-5c70-9696-f719f8f3bcdc"
 version = "2.9.1"
 
 [[deps.REPL]]
-deps = ["InteractiveUtils", "Markdown", "Sockets", "Unicode"]
+deps = ["InteractiveUtils", "Markdown", "Sockets", "StyledStrings", "Unicode"]
 uuid = "3fa0cd96-eef1-5676-8a61-b3b8758bbffb"
+version = "1.11.0"
 
 [[deps.Random]]
-deps = ["SHA", "Serialization"]
+deps = ["SHA"]
 uuid = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+version = "1.11.0"
 
 [[deps.RangeArrays]]
 git-tree-sha1 = "b9039e93773ddcfc828f12aadf7115b4b4d225f5"
@@ -1643,6 +1749,7 @@ version = "1.4.0"
 
 [[deps.Serialization]]
 uuid = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+version = "1.11.0"
 
 [[deps.Setfield]]
 deps = ["ConstructionBase", "Future", "MacroTools", "StaticArraysCore"]
@@ -1653,6 +1760,7 @@ version = "1.1.1"
 [[deps.SharedArrays]]
 deps = ["Distributed", "Mmap", "Random", "Serialization"]
 uuid = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
+version = "1.11.0"
 
 [[deps.Showoff]]
 deps = ["Dates", "Grisu"]
@@ -1672,6 +1780,7 @@ version = "1.1.0"
 
 [[deps.Sockets]]
 uuid = "6462fe0b-24de-5631-8697-dd941f90decc"
+version = "1.11.0"
 
 [[deps.SortingAlgorithms]]
 deps = ["DataStructures"]
@@ -1682,6 +1791,7 @@ version = "1.1.1"
 [[deps.SparseArrays]]
 deps = ["Libdl", "LinearAlgebra", "Random", "Serialization", "SuiteSparse_jll"]
 uuid = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+version = "1.11.0"
 
 [[deps.SpecialFunctions]]
 deps = ["IrrationalConstants", "LogExpFunctions", "OpenLibm_jll", "OpenSpecFun_jll"]
@@ -1721,9 +1831,14 @@ uuid = "64bff920-2084-43da-a3e6-9bb72801c0c9"
 version = "3.2.0"
 
 [[deps.Statistics]]
-deps = ["LinearAlgebra", "SparseArrays"]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "ae3bb1eb3bba077cd276bc5cfc337cc65c3075c0"
 uuid = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-version = "1.9.0"
+version = "1.11.1"
+weakdeps = ["SparseArrays"]
+
+    [deps.Statistics.extensions]
+    SparseArraysExt = ["SparseArrays"]
 
 [[deps.StatsAPI]]
 deps = ["LinearAlgebra"]
@@ -1763,14 +1878,18 @@ git-tree-sha1 = "a04cabe79c5f01f4d723cc6704070ada0b9d46d5"
 uuid = "892a3eda-7b42-436c-8928-eab12a02cf0e"
 version = "0.3.4"
 
+[[deps.StyledStrings]]
+uuid = "f489334b-da3d-4c2e-b8f0-e476e12c162b"
+version = "1.11.0"
+
 [[deps.SuiteSparse]]
 deps = ["Libdl", "LinearAlgebra", "Serialization", "SparseArrays"]
 uuid = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 
 [[deps.SuiteSparse_jll]]
-deps = ["Artifacts", "Libdl", "Pkg", "libblastrampoline_jll"]
+deps = ["Artifacts", "Libdl", "libblastrampoline_jll"]
 uuid = "bea87d4a-7f5b-5778-9afe-8cc45184846c"
-version = "5.10.1+6"
+version = "7.7.0+0"
 
 [[deps.TOML]]
 deps = ["Dates"]
@@ -1815,6 +1934,7 @@ version = "0.1.7"
 [[deps.Test]]
 deps = ["InteractiveUtils", "Logging", "Random", "Serialization"]
 uuid = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+version = "1.11.0"
 
 [[deps.TranscodingStreams]]
 deps = ["Random", "Test"]
@@ -1855,9 +1975,11 @@ version = "1.5.0"
 [[deps.UUIDs]]
 deps = ["Random", "SHA"]
 uuid = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
+version = "1.11.0"
 
 [[deps.Unicode]]
 uuid = "4ec0a83e-493e-50e2-b9ac-8f72acf5a8f5"
+version = "1.11.0"
 
 [[deps.UnicodeFun]]
 deps = ["REPL"]
@@ -2085,7 +2207,7 @@ version = "1.5.0+0"
 [[deps.Zlib_jll]]
 deps = ["Libdl"]
 uuid = "83775a58-1f1d-513f-b197-d71354ab007a"
-version = "1.2.13+0"
+version = "1.2.13+1"
 
 [[deps.Zstd_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl"]
@@ -2126,7 +2248,7 @@ version = "0.15.1+0"
 [[deps.libblastrampoline_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850b90-86db-534c-a0d3-1478176c7d93"
-version = "5.8.0+0"
+version = "5.11.0+0"
 
 [[deps.libevdev_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2167,12 +2289,12 @@ version = "1.1.6+0"
 [[deps.nghttp2_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "8e850ede-7688-5339-a07c-302acd2aaf8d"
-version = "1.48.0+0"
+version = "1.59.0+0"
 
 [[deps.p7zip_jll]]
 deps = ["Artifacts", "Libdl"]
 uuid = "3f19e933-33d8-53b3-aaab-bd5110c3b7a0"
-version = "17.4.0+0"
+version = "17.4.0+2"
 
 [[deps.x264_jll]]
 deps = ["Artifacts", "JLLWrappers", "Libdl", "Pkg"]
@@ -2195,8 +2317,8 @@ version = "1.4.1+1"
 
 # ╔═╡ Cell order:
 # ╟─d35503c2-c770-4fe6-83a8-b4cfe018528a
-# ╟─8de73a40-4621-4058-81be-5d0bcb855505
-# ╠═b69809e3-98bd-404d-aef2-112af6ea95da
+# ╟─b69809e3-98bd-404d-aef2-112af6ea95da
+# ╟─d6158640-391b-4049-a297-f94a487e5c3f
 # ╟─d5bebf5c-36b8-40e8-bef8-9dc86f6bdc3f
 # ╟─ad806f5b-3e52-487e-a9f3-aec1aeb08fc8
 # ╟─f0b55d8f-689b-4edb-bfd4-3ac8cef3f943
@@ -2212,6 +2334,9 @@ version = "1.4.1+1"
 # ╠═4968d062-073f-4c84-ba29-0642d27a7ddc
 # ╠═5efc2b30-7c73-4be5-844b-66b8597eeb09
 # ╟─e800f099-5c68-4e84-b4d4-f3103448c61d
+# ╟─4aed7d22-9328-42e6-b411-b6e954b6f5bb
+# ╠═cc1d796c-cf6b-40a0-961d-03111f71a4c3
+# ╠═e639bbcf-b2f3-47bd-9e2c-469560055dc2
 # ╠═f79cd85c-d0e9-4831-8547-c50aac921b3b
 # ╟─8ed8602b-aa67-4ed9-8afa-adb9692abafc
 # ╟─6d2d26a1-23e9-48bb-884f-a7e2158f0359
@@ -2221,7 +2346,7 @@ version = "1.4.1+1"
 # ╟─00acc7d9-34c4-400b-9618-ec800791c45c
 # ╠═d30d2b58-7ced-41b8-b943-efe55766c4df
 # ╟─d81a062c-99b6-4abe-b67c-26eba92b6604
-# ╟─860fccb7-9f46-4908-a788-a5686f553afb
+# ╠═860fccb7-9f46-4908-a788-a5686f553afb
 # ╟─aedbc784-027e-46d5-8eef-945ff86949ae
 # ╠═baa0f945-caff-472f-bc5c-4a046cd9b802
 # ╟─1dc9aa34-af9b-4e4f-ae8c-f1b054c6e538
@@ -2230,9 +2355,14 @@ version = "1.4.1+1"
 # ╠═007eb670-b962-48cc-aade-62d2e6fcfd58
 # ╟─730efa85-6278-44f7-8a01-9c5c9944b058
 # ╠═5cdf5494-90a9-4c06-ac17-2f2386337d33
+# ╟─060345de-1b7f-47c3-a465-c952834abfb9
 # ╟─fe549548-dd54-4c64-96be-babe17525835
 # ╟─54061650-ffdc-4cea-8c3c-28b7ef9c5a37
-# ╠═839fce28-7d9a-4bd1-9519-8fb164443caa
+# ╟─839fce28-7d9a-4bd1-9519-8fb164443caa
+# ╠═6dfe20fe-8ed8-4692-816f-e6b57fc1a327
+# ╟─482971bc-7ec8-49a5-b2c8-cb008defbb4c
+# ╟─863d5dd7-8c60-4de6-988a-5371b5f005d4
+# ╟─3dac50f5-0790-4007-80e3-794bd7256cc0
 # ╟─9b0ac0e3-4c67-47d1-b6c8-4c82f15383e8
 # ╟─9140e4f0-bdc8-478d-8898-6a0a57150d8e
 # ╟─e27eac05-9e86-46c1-8b31-25925cf483b5
